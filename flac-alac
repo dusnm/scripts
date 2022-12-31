@@ -1,0 +1,143 @@
+#!/bin/bash
+#
+# Bash script that automates reencoding of flac files to alac for use on Apple devices
+# Copyright (C) 2023 Dusan Mitrovic <dusan@dusanmitrovic.xyz>
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+TMP_FILE="/tmp/tags.tmp"
+
+depcheck() {
+    deps="metaflac flac alacenc find sort wc"
+
+    for dep in $deps
+    do
+        satisfied="$(command -v "$dep")"
+
+        if [ -z "$satisfied" ]; then
+            echo "Unsatisfied dependency: $dep"
+            exit 1
+        fi
+    done
+}
+
+listfiles() {
+    filelist="$(find "$PWD" -maxdepth 1 -regex "^.*[.]flac$" -type f -not -path '*/\.*' | sort)"
+
+    if [ -z "$filelist" ]; then
+        echo "The current directory doesn't seem to contain any flac files."
+        exit 1
+    fi
+}
+
+exportmetadata() {
+    f="$1"
+    metaflac --export-tags-to="$TMP_FILE" "$f"
+}
+
+parsemetadata() {
+    title=""
+    album=""
+    albumartist=""
+    artist=""
+    genre=""
+    date=""
+    tracknumber=""
+    tracktotal="$(echo "$filelist" | wc -l)"
+    discnumber="1"
+    disctotal="1"
+
+    while read -r tag;
+    do
+        tag_key="$(echo "$tag" | cut -d'=' -f1)"
+        tag_value="$(echo "$tag" | cut -d'=' -f2)"
+
+        case "$tag_key" in
+            "TITLE")
+                title="$tag_value"
+                ;;
+            "ALBUM")
+                album="$tag_value"
+                ;;
+            "ALBUMARTIST")
+                albumartist="$tag_value"
+                ;;
+            "ARTIST")
+                artist="$tag_value"
+                ;;
+            "GENRE")
+                genre="$tag_value"
+                ;;
+            "DATE")
+                date="$tag_value"
+                ;;
+            "TRACKNUMBER")
+                tracknumber="$tag_value"
+                ;;
+            "TRACKTOTAL")
+                tracktotal="$tag_value"
+                ;;
+            "DISCNUMBER")
+                discnumber="$tag_value"
+                ;;
+            "DISCTOTAL")
+                disctotal="$tag_value"
+                ;;
+        esac
+    done < "$TMP_FILE"
+}
+
+decodeandencode() {
+    f="$1"
+    args=(
+        --artist="$artist"
+        --album="$album"
+        --albumArtist="$albumartist"
+        --title="$title"
+        --genre="$genre"
+        --year="$date"
+        --track="$tracknumber/$tracktotal"
+        --disc="$discnumber/$disctotal"
+    )
+
+    if [ -f "$PWD/folder.jpg" ]; then
+        args+=(--cover="$PWD/folder.jpg")
+    fi
+
+    echo "Encoding: $artist - $title"
+
+    flac -s -d -c "$f" | alacenc "${args[@]}" - "$PWD/alac/$tracknumber $title.m4a"
+}
+
+cleanup() {
+    rm "$TMP_FILE"
+}
+
+main() {
+    depcheck
+    listfiles
+
+    if [ ! -d "$PWD/alac" ]; then
+        mkdir "$PWD/alac" || exit 1
+    fi
+
+    while read -r file;
+    do
+        exportmetadata "$file"
+        parsemetadata "$file"
+        decodeandencode "$file"
+        cleanup
+    done <<< "$filelist"
+}
+
+main
