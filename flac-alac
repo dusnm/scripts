@@ -97,6 +97,23 @@ parsemetadata() {
     done < "$TMP_FILE"
 }
 
+selectcoverart() {
+    coverart=""
+    artnames="folder.jpg folder.jpeg folder.png cover.jpg cover.png"
+
+    for art in $artnames
+    do
+        if [ -f "$PWD/$art" ]; then
+            coverart="$PWD/$art"
+            break
+        fi
+    done
+
+    if [ -z "$coverart" ]; then
+        echo "Warning: No suitable cover artwork found in the current directory."
+    fi
+}
+
 decodeandencode() {
     f="$1"
     args=(
@@ -110,8 +127,8 @@ decodeandencode() {
         --disc="$discnumber/$disctotal"
     )
 
-    if [ -f "$PWD/folder.jpg" ]; then
-        args+=(--cover="$PWD/folder.jpg")
+    if [ ! -z "$coverart" ]; then
+        args+=(--cover="$coverart")
     fi
 
     echo "Encoding: $artist - $title"
@@ -126,6 +143,7 @@ cleanup() {
 main() {
     depcheck
     listfiles
+    selectcoverart
 
     if [ ! -d "$PWD/alac" ]; then
         mkdir "$PWD/alac" || exit 1
