@@ -1,0 +1,142 @@
+#!/bin/sh
+#
+# A POSIX shell script that gets the exchange rate for a given currency
+#
+# Copyright (C) 2023 Dusan Mitrovic <dusan@dusanmitrovic.xyz>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# Depends on:
+#   - curl
+#   - jq
+#   - bc
+CACHED=""
+CACHE_DIR="$XDG_CACHE_HOME/crnc"
+API_BASE_URL="https://api.apilayer.com/exchangerates_data"
+BASE_CURRENCY="RSD"
+OTHER_CURRENCIES="EUR,USD,CHF"
+
+deps() {
+    deps="curl jq bc"
+
+    for dep in $deps;
+    do
+        if [ "$(command -v "$dep" | wc -l)" -eq 0 ]; then
+            echo "Unsatisfied dependency: $dep"
+            
+            exit 1
+        fi
+    done
+}
+
+validate_env() {
+    if [ -z "$XDG_CACHE_HOME" ]; then
+        echo "Cache directory is not defined. Define \$XDG_CACHE_HOME in your environment"
+        
+        exit 1
+    fi
+
+    if [ -z "$EXR_API_KEY" ]; then
+        echo "No exchange rate api key is available"
+        echo "Obtain one at: https://exchangeratesapi.io"
+        echo "Define \$EXR_API_KEY in your environment with the obtained value"
+
+        exit 1
+    fi
+}
+
+create_cache_dir_if_not_exists() {
+    if [ ! -d "$CACHE_DIR" ]; then
+        if ! mkdir "$CACHE_DIR"; then
+            echo "Unable to create cache directory"
+
+            exit 1
+        fi
+    fi
+}
+
+get_from_cache() {
+    if [ -f "$CACHE_DIR/cache" ]; then
+        cachec="$(cat "$CACHE_DIR/cache")"
+        cache="$(echo "$cachec" | cut -d';' -f1)"
+        cached_timestamp="$(echo "$cachec" | cut -d';' -f2)"
+        current_timestamp="$(date +%s)"
+
+        if [ "$current_timestamp" -lt "$cached_timestamp" ]; then
+            CACHED="$cache"
+        else
+            rm "$CACHE_DIR/cache"
+        fi
+    fi
+}
+
+set_to_cache() {
+    current_timestamp="$(date +%s)"
+    cached_timestamp=$(echo "$current_timestamp + 3600" | bc)
+    cached_value="$(echo "$1" | jq -r tostring)"
+
+    echo "$cached_value;$cached_timestamp" > "$CACHE_DIR/cache"
+}
+
+print_result() {
+    currencies="$(echo "$OTHER_CURRENCIES" | tr ',' "\n")"
+
+    for currency in $currencies;
+    do
+        value="$(echo "$1" | jq ".$currency")"
+        value="$(echo "scale=5 ; 1 / $value" | bc)"
+
+        echo "1 $BASE_CURRENCY -> $value $currency"
+    done
+}
+
+make_request() {
+    get_from_cache
+
+    if [ -n "$CACHED" ]; then
+        print_result "$(echo "$CACHED" | jq .rates)"
+
+        exit 0
+    fi
+
+    response="$(curl -s --header "apikey: $EXR_API_KEY" --url "$API_BASE_URL/latest?base=$BASE_CURRENCY&symbols=$OTHER_CURRENCIES")"
+
+    error="$(echo "$response" | jq .error)"
+    if [ "$error" != null ]; then
+        echo "$error" | jq .message
+
+        exit 1
+    fi
+
+    success="$(echo "$response" | jq .success)"
+    if [ "$success" = false ]; then
+        echo "Unable to process response from the exchange rates server"
+
+        exit 1
+    fi
+
+    set_to_cache "$response"
+
+    print_result "$(echo "$response" | jq .rates)"
+}
+
+main() {
+    deps
+    validate_env
+    create_cache_dir_if_not_exists
+
+    make_request
+}
+
+main
